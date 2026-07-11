@@ -1,278 +1,481 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hand Tracker</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            background: #1a1a1a;
-            font-family: Arial;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-        }
-        
-        .container {
-            background: #333;
-            padding: 20px;
-            border-radius: 10px;
-            max-width: 800px;
-            width: 100%;
-        }
-        
-        h1 {
-            color: white;
-            text-align: center;
-            margin: 0 0 10px 0;
-        }
-        
-        .status {
-            color: #0f0;
-            text-align: center;
-            margin-bottom: 20px;
-            font-weight: bold;
-        }
-        
-        canvas {
-            width: 100%;
-            background: black;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            display: block;
-        }
-        
-        .buttons {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        button {
-            padding: 10px 25px;
-            margin: 5px;
-            font-size: 16px;
-            background: #0066ff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        
-        button:hover {
-            background: #0052cc;
-        }
-        
-        button:disabled {
-            background: #666;
-            cursor: not-allowed;
-        }
-        
-        .info {
-            color: white;
-            text-align: center;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>X-Ray Hand Tracker</title>
+<style>
+  html, body { margin:0; padding:0; background:#000; overflow:hidden; height:100%; }
+  #stage-outer {
+    width:100%; height:100%;
+    display:flex; align-items:center; justify-content:center;
+    background:#000;
+  }
+  #stage {
+    position:relative;
+    overflow:hidden;
+    background:#000;
+  }
+  #stage video, #stage canvas, #stage svg {
+    position:absolute; top:0; left:0; width:100%; height:100%;
+  }
+  #bgVideo { transform:scaleX(-1); object-fit:cover; z-index:0; }
+  #threeCanvas { z-index:10; pointer-events:none; }
+  #skeletonCanvas { z-index:20; pointer-events:none; }
+  #overlaySvg { z-index:20; pointer-events:none; }
+  .marker {
+    position:absolute; width:14px; height:14px; margin:-7px 0 0 -7px;
+    background:#39ff88; border-radius:3px;
+    box-shadow:0 0 10px 3px rgba(57,255,136,0.9);
+    z-index:21; pointer-events:none; display:none;
+  }
+  #loadingOverlay {
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    background:rgba(0,0,0,0.85);
+    display:flex; align-items:center; justify-content:center;
+    color:#cdefff; font:16px/1.4 -apple-system, Arial, sans-serif;
+    z-index:30; text-align:center; letter-spacing:0.5px;
+  }
+  #modeLabel {
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    color:rgba(255,255,255,0.6); font:12px monospace;
+    z-index:30; pointer-events:none; text-transform:uppercase; letter-spacing:2px;
+  }
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🦴 Hand Tracker</h1>
-        <div class="status" id="status">Ready</div>
-        <canvas id="canvas" width="800" height="600"></canvas>
-        <div class="buttons">
-            <button id="startBtn">Start Camera</button>
-            <button id="stopBtn" disabled>Stop Camera</button>
-        </div>
-        <div class="info">
-            <p>Hands: <strong id="handCount">0</strong></p>
-            <p>FPS: <strong id="fps">0</strong></p>
-        </div>
+  <div id="stage-outer">
+    <div id="stage">
+      <video id="bgVideo" autoplay playsinline muted></video>
+      <canvas id="threeCanvas"></canvas>
+      <canvas id="skeletonCanvas"></canvas>
+      <svg id="overlaySvg"></svg>
+      <div class="marker" id="markerTL"></div>
+      <div class="marker" id="markerTR"></div>
+      <div class="marker" id="markerBL"></div>
+      <div class="marker" id="markerBR"></div>
+      <div id="modeLabel">particle mode</div>
+      <div id="loadingOverlay">Loading AI Models &amp; Camera…</div>
     </div>
+  </div>
 
-    <video id="video" style="display:none;" playsinline autoplay muted></video>
+  <video id="rawVideo" style="display:none" playsinline muted></video>
 
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424926/hands.js"></script>
-    
-    <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const video = document.getElementById('video');
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const statusEl = document.getElementById('status');
-        const handCountEl = document.getElementById('handCount');
-        const fpsEl = document.getElementById('fps');
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js";
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
-        let hands = null;
-        let isRunning = false;
-        let frameCount = 0;
-        let lastTime = Date.now();
+const stageOuter = document.getElementById('stage-outer');
+const stage = document.getElementById('stage');
+const bgVideo = document.getElementById('bgVideo');
+const rawVideo = document.getElementById('rawVideo');
+const threeCanvas = document.getElementById('threeCanvas');
+const skeletonCanvas = document.getElementById('skeletonCanvas');
+const skelCtx = skeletonCanvas.getContext('2d');
+const overlaySvg = document.getElementById('overlaySvg');
+const loadingOverlay = document.getElementById('loadingOverlay');
+const modeLabel = document.getElementById('modeLabel');
+const markers = {
+  TL: document.getElementById('markerTL'),
+  TR: document.getElementById('markerTR'),
+  BL: document.getElementById('markerBL'),
+  BR: document.getElementById('markerBR'),
+};
 
-        startBtn.addEventListener('click', async () => {
-            try {
-                statusEl.textContent = 'Requesting camera...';
-                statusEl.style.color = '#ff0';
-                
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-                    audio: false
-                });
-                
-                video.srcObject = stream;
-                
-                // Wait for video to be ready
-                await new Promise(resolve => {
-                    const checkReady = () => {
-                        if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                            resolve();
-                        } else {
-                            setTimeout(checkReady, 100);
-                        }
-                    };
-                    checkReady();
-                });
-                
-                // Set canvas size
-                canvas.width = video.videoWidth || 1280;
-                canvas.height = video.videoHeight || 720;
-                
-                console.log('Video ready! Size:', canvas.width, 'x', canvas.height);
-                
-                // Initialize hands
-                if (typeof Hands !== 'undefined') {
-                    initHands();
-                } else {
-                    statusEl.textContent = 'Error: Library not loaded';
-                    statusEl.style.color = '#f00';
-                }
-                
-                isRunning = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                statusEl.textContent = 'Running';
-                statusEl.style.color = '#0f0';
-                
-            } catch (error) {
-                statusEl.textContent = 'ERROR: ' + error.name;
-                statusEl.style.color = '#f00';
-                console.error(error);
-                alert('Error: ' + error.message);
-            }
-        });
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
 
-        function initHands() {
-            hands = new Hands({
-                locateFile: (file) => {
-                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424926/${file}`;
-                }
-            });
+let videoAspect = 16/9;
+let handLandmarker = null;
+let effectMode = 'particle'; // 'particle' | 'xray'
+let pointsRef = null; // {tl,tr,bl,br} normalized [0,1] video-space points, or null
+let lastVideoTime = -1;
+let stream = null;
 
-            hands.setOptions({
-                maxNumHands: 2,
-                modelComplexity: 1,
-                minDetectionConfidence: 0.7,
-                minTrackingConfidence: 0.5
-            });
+// ---------- layout ----------
+function layout() {
+  const winAspect = window.innerWidth / window.innerHeight;
+  let w, h;
+  if (winAspect > videoAspect) {
+    h = window.innerHeight;
+    w = h * videoAspect;
+  } else {
+    w = window.innerWidth;
+    h = w / videoAspect;
+  }
+  stage.style.width = w + 'px';
+  stage.style.height = h + 'px';
+  threeCanvas.width = w; threeCanvas.height = h;
+  skeletonCanvas.width = w; skeletonCanvas.height = h;
+  overlaySvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  renderer && renderer.setSize(w, h, false);
+  if (camera3) {
+    camera3.right = w; camera3.bottom = h;
+    camera3.updateProjectionMatrix();
+  }
+}
+window.addEventListener('resize', layout);
 
-            hands.onResults(onResults);
-            detectFrame();
-        }
+// ---------- three.js setup ----------
+let renderer, scene, camera3, mesh, material, videoTexture;
+const GRID = 24;
 
-        function onResults(results) {
-            // Draw video
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            // Draw hands
-            if (results.multiHandLandmarks) {
-                handCountEl.textContent = results.multiHandLandmarks.length;
-                
-                results.multiHandLandmarks.forEach((landmarks, idx) => {
-                    const isRight = results.multiHandedness[idx].label === 'Right';
-                    const color = isRight ? '#FF6B6B' : '#4A90E2';
-                    
-                    // Draw joints
-                    landmarks.forEach((lm, i) => {
-                        const x = lm.x * canvas.width;
-                        const y = lm.y * canvas.height;
-                        
-                        ctx.fillStyle = color;
-                        ctx.beginPath();
-                        ctx.arc(x, y, 4, 0, Math.PI * 2);
-                        ctx.fill();
-                        
-                        ctx.strokeStyle = 'white';
-                        ctx.lineWidth = 1;
-                        ctx.stroke();
-                    });
-                    
-                    // Draw skeleton
-                    const connections = [
-                        [0, 1], [1, 2], [2, 3], [3, 4],
-                        [0, 5], [5, 6], [6, 7], [7, 8],
-                        [5, 9], [9, 10], [10, 11], [11, 12],
-                        [9, 13], [13, 14], [14, 15], [15, 16],
-                        [13, 17], [17, 18], [18, 19], [19, 20],
-                        [0, 17]
-                    ];
-                    
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 2;
-                    ctx.globalAlpha = 0.6;
-                    
-                    connections.forEach(([a, b]) => {
-                        const from = landmarks[a];
-                        const to = landmarks[b];
-                        ctx.beginPath();
-                        ctx.moveTo(from.x * canvas.width, from.y * canvas.height);
-                        ctx.lineTo(to.x * canvas.width, to.y * canvas.height);
-                        ctx.stroke();
-                    });
-                    
-                    ctx.globalAlpha = 1;
-                });
-            } else {
-                handCountEl.textContent = '0';
-            }
-            
-            // FPS
-            frameCount++;
-            const now = Date.now();
-            if (now - lastTime >= 1000) {
-                fpsEl.textContent = frameCount;
-                frameCount = 0;
-                lastTime = now;
-            }
-        }
+const vertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
 
-        function detectFrame() {
-            if (!isRunning) return;
-            
-            if (hands) {
-                hands.send({ image: video });
-            }
-            
-            requestAnimationFrame(detectFrame);
-        }
+const fragmentShader = `
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D tDiffuse;
+  uniform vec2 resolution;
+  uniform float time;
+  uniform float uMode;
 
-        stopBtn.addEventListener('click', () => {
-            isRunning = false;
-            
-            if (video.srcObject) {
-                video.srcObject.getTracks().forEach(t => t.stop());
-            }
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            handCountEl.textContent = '0';
-            fpsEl.textContent = '0';
-            
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            statusEl.textContent = 'Stopped';
-            statusEl.style.color = '#ffa500';
-        });
-    </script>
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  }
+
+  vec3 particleEffect(vec2 uv) {
+    vec3 tex = texture2D(tDiffuse, uv).rgb;
+    float brightness = dot(tex, vec3(0.299, 0.587, 0.114));
+
+    // Contour lines
+    float bands = 10.0;
+    float band = fract(brightness * bands - time * 0.5);
+    float line = smoothstep(0.0, 0.06, band) * smoothstep(0.12, 0.06, band);
+    vec3 contourColor = vec3(0.05, 0.3, 0.9) * line * 1.5;
+
+    // Particle grid
+    float cells = 90.0;
+    vec2 cell = floor(uv * cells);
+    vec2 cellUv = (cell + 0.5) / cells;
+    vec3 cellTex = texture2D(tDiffuse, cellUv).rgb;
+    float cellBrightness = dot(cellTex, vec3(0.299, 0.587, 0.114));
+
+    vec2 local = fract(uv * cells) - 0.5;
+    float dist = max(abs(local.x), abs(local.y));
+    float square = 1.0 - smoothstep(0.28, 0.32, dist);
+
+    float phase = hash(cell) * 6.2831;
+    float strobe = 0.5 + 0.5 * sin(time * 15.0 + phase);
+
+    vec3 colA = vec3(1.0, 0.2, 0.6);
+    vec3 colB = vec3(1.0, 0.9, 0.2);
+    vec3 colC = vec3(1.0, 1.0, 1.0);
+    float cyc = fract(time * 15.0 / 3.0 + phase / 6.2831);
+    vec3 particleColor = cyc < 0.333 ? colA : (cyc < 0.666 ? colB : colC);
+
+    vec3 particles = particleColor * square * strobe * step(0.15, cellBrightness);
+
+    vec3 glow = vec3(0.1, 0.3, 0.9) * smoothstep(0.2, 0.8, brightness) * 0.6;
+
+    return contourColor + particles + glow;
+  }
+
+  vec3 xrayEffect(vec2 uv) {
+    vec3 tex = texture2D(tDiffuse, uv).rgb;
+    float brightness = dot(tex, vec3(0.299, 0.587, 0.114));
+
+    vec3 baseBlue = vec3(0.6, 0.85, 1.0);
+    vec3 darkBlue = vec3(0.02, 0.05, 0.15);
+    float faceMask = smoothstep(0.15, 0.75, brightness);
+    vec3 base = mix(darkBlue, baseBlue, faceMask);
+
+    vec2 texel = 1.0 / resolution;
+    float tl = dot(texture2D(tDiffuse, uv + texel*vec2(-1.0,-1.0)).rgb, vec3(0.299,0.587,0.114));
+    float t  = dot(texture2D(tDiffuse, uv + texel*vec2( 0.0,-1.0)).rgb, vec3(0.299,0.587,0.114));
+    float tr = dot(texture2D(tDiffuse, uv + texel*vec2( 1.0,-1.0)).rgb, vec3(0.299,0.587,0.114));
+    float l  = dot(texture2D(tDiffuse, uv + texel*vec2(-1.0, 0.0)).rgb, vec3(0.299,0.587,0.114));
+    float r  = dot(texture2D(tDiffuse, uv + texel*vec2( 1.0, 0.0)).rgb, vec3(0.299,0.587,0.114));
+    float bl = dot(texture2D(tDiffuse, uv + texel*vec2(-1.0, 1.0)).rgb, vec3(0.299,0.587,0.114));
+    float b  = dot(texture2D(tDiffuse, uv + texel*vec2( 0.0, 1.0)).rgb, vec3(0.299,0.587,0.114));
+    float br = dot(texture2D(tDiffuse, uv + texel*vec2( 1.0, 1.0)).rgb, vec3(0.299,0.587,0.114));
+
+    float edgeX = -tl - 2.0*l - bl + tr + 2.0*r + br;
+    float edgeY = -tl - 2.0*t - tr + bl + 2.0*b + br;
+    float edge = sqrt(edgeX*edgeX + edgeY*edgeY);
+    vec3 edgeColor = vec3(0.0, 0.9, 1.0) * edge * 2.0;
+
+    float noise = (hash(uv * resolution + time * 100.0) - 0.5) * 0.1;
+
+    float scan = sin(uv.y * resolution.y * 2.0) * 0.05;
+
+    return base + edgeColor + noise - scan;
+  }
+
+  void main() {
+    vec2 uv = vUv;
+    vec3 particleColor = particleEffect(uv);
+    vec3 xrayColor = xrayEffect(uv);
+    vec3 finalColor = mix(particleColor, xrayColor, uMode);
+    gl_FragColor = vec4(finalColor, 0.95);
+  }
+`;
+
+function initThree(w, h) {
+  renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+  renderer.setSize(w, h, false);
+  scene = new THREE.Scene();
+  camera3 = new THREE.OrthographicCamera(0, w, 0, h, -10, 10);
+  camera3.position.z = 1;
+
+  videoTexture = new THREE.VideoTexture(rawVideo);
+  videoTexture.minFilter = THREE.LinearFilter;
+  videoTexture.magFilter = THREE.LinearFilter;
+
+  material = new THREE.ShaderMaterial({
+    uniforms: {
+      tDiffuse: { value: videoTexture },
+      resolution: { value: new THREE.Vector2(w, h) },
+      time: { value: 0 },
+      uMode: { value: 0 },
+    },
+    vertexShader, fragmentShader,
+    transparent: true,
+    side: THREE.DoubleSide,
+  });
+
+  const geo = new THREE.PlaneGeometry(1, 1, GRID, GRID);
+  mesh = new THREE.Mesh(geo, material);
+  mesh.visible = false;
+  scene.add(mesh);
+}
+
+function bilerp(tl, tr, bl, br, u, v) {
+  const top = { x: tl.x + (tr.x - tl.x) * u, y: tl.y + (tr.y - tl.y) * u };
+  const bot = { x: bl.x + (br.x - bl.x) * u, y: bl.y + (br.y - bl.y) * u };
+  return { x: top.x + (bot.x - top.x) * v, y: top.y + (bot.y - top.y) * v };
+}
+
+function updateMeshGeometry(w, h) {
+  if (!pointsRef) { mesh.visible = false; return; }
+  mesh.visible = true;
+
+  // mirror x to match mirrored background video
+  const mir = p => ({ x: 1 - p.x, y: p.y });
+  const tl = mir(pointsRef.tl), tr = mir(pointsRef.tr);
+  const bl = mir(pointsRef.bl), br = mir(pointsRef.br);
+
+  const pos = mesh.geometry.attributes.position;
+  const uv = mesh.geometry.attributes.uv;
+  const n = GRID + 1;
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const u = i / GRID, v = j / GRID;
+      const p = bilerp(tl, tr, bl, br, u, v);
+      const idx = j * n + i;
+      pos.setXYZ(idx, p.x * w, p.y * h, 0);
+      uv.setXY(idx, u, 1 - v);
+    }
+  }
+  pos.needsUpdate = true;
+  uv.needsUpdate = true;
+}
+
+// ---------- markers / border ----------
+function updateOverlay(w, h) {
+  if (!pointsRef) {
+    Object.values(markers).forEach(m => m.style.display = 'none');
+    overlaySvg.innerHTML = '';
+    return;
+  }
+  const mir = p => ({ x: (1 - p.x) * w, y: p.y * h });
+  const tl = mir(pointsRef.tl), tr = mir(pointsRef.tr);
+  const bl = mir(pointsRef.bl), br = mir(pointsRef.br);
+
+  markers.TL.style.left = tl.x + 'px'; markers.TL.style.top = tl.y + 'px'; markers.TL.style.display = 'block';
+  markers.TR.style.left = tr.x + 'px'; markers.TR.style.top = tr.y + 'px'; markers.TR.style.display = 'block';
+  markers.BL.style.left = bl.x + 'px'; markers.BL.style.top = bl.y + 'px'; markers.BL.style.display = 'block';
+  markers.BR.style.left = br.x + 'px'; markers.BR.style.top = br.y + 'px'; markers.BR.style.display = 'block';
+
+  overlaySvg.innerHTML = `
+    <polygon points="${tl.x},${tl.y} ${tr.x},${tr.y} ${br.x},${br.y} ${bl.x},${bl.y}"
+      fill="none" stroke="rgba(57,255,136,0.8)" stroke-width="1.5"
+      style="filter:drop-shadow(0 0 4px rgba(57,255,136,0.8));" />
+  `;
+}
+
+// ---------- skeleton drawing ----------
+function drawSkeleton(landmarksList) {
+  skelCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+  const w = skeletonCanvas.width, h = skeletonCanvas.height;
+
+  skelCtx.strokeStyle = 'rgba(255,255,255,0.4)';
+  skelCtx.lineWidth = 1;
+  skelCtx.shadowColor = 'rgba(255,255,255,0.6)';
+  skelCtx.shadowBlur = 3;
+
+  landmarksList.forEach(landmarks => {
+    const pt = lm => ({ x: (1 - lm.x) * w, y: lm.y * h });
+
+    HAND_CONNECTIONS.forEach(([a, b]) => {
+      const s = pt(landmarks[a]), e = pt(landmarks[b]);
+      skelCtx.beginPath();
+      skelCtx.moveTo(s.x, s.y);
+      skelCtx.lineTo(e.x, e.y);
+      skelCtx.stroke();
+    });
+
+    skelCtx.fillStyle = 'rgba(255,255,255,0.4)';
+    landmarks.forEach(lm => {
+      const p = pt(lm);
+      skelCtx.beginPath();
+      skelCtx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+      skelCtx.fill();
+    });
+  });
+}
+
+// ---------- gesture logic ----------
+function isPinching(hand) {
+  const dx = hand[8].x - hand[4].x;
+  const dy = hand[8].y - hand[4].y;
+  return Math.sqrt(dx*dx + dy*dy) < 0.20;
+}
+
+function boundingBoxWindow(landmarks) {
+  let minX = 1, maxX = 0, minY = 1, maxY = 0;
+  landmarks.forEach(l => {
+    minX = Math.min(minX, l.x); maxX = Math.max(maxX, l.x);
+    minY = Math.min(minY, l.y); maxY = Math.max(maxY, l.y);
+  });
+  const padX = (maxX - minX) * 0.2, padY = (maxY - minY) * 0.2;
+  minX -= padX; maxX += padX; minY -= padY; maxY += padY;
+  return {
+    tl: { x: minX, y: minY }, tr: { x: maxX, y: minY },
+    bl: { x: minX, y: maxY }, br: { x: maxX, y: maxY },
+  };
+}
+
+function computeWindow(landmarksList) {
+  if (landmarksList.length === 0) return null;
+
+  if (landmarksList.length === 1) {
+    const hand = landmarksList[0];
+    effectMode = isPinching(hand) ? 'xray' : 'particle';
+    return boundingBoxWindow(hand);
+  }
+
+  const [h1, h2] = landmarksList;
+  const pinch1 = isPinching(h1), pinch2 = isPinching(h2);
+
+  if (pinch1 && pinch2) {
+    effectMode = 'xray';
+    const c1 = midpoint(h1[8], h1[4]);
+    const c2 = midpoint(h2[8], h2[4]);
+    const [left, right] = c1.x < c2.x ? [c1, c2] : [c2, c1];
+    const offset = 0.075;
+    return {
+      tl: { x: left.x, y: left.y - offset },
+      tr: { x: right.x, y: right.y - offset },
+      bl: { x: left.x, y: left.y + offset },
+      br: { x: right.x, y: right.y + offset },
+    };
+  }
+
+  effectMode = 'particle';
+  const idx1 = h1[8], thumb1 = h1[4], idx2 = h2[8], thumb2 = h2[4];
+  const [lIdx, rIdx] = idx1.x < idx2.x ? [idx1, idx2] : [idx2, idx1];
+  const [lThumb, rThumb] = thumb1.x < thumb2.x ? [thumb1, thumb2] : [thumb2, thumb1];
+  return {
+    tl: { x: lIdx.x, y: lIdx.y },
+    tr: { x: rIdx.x, y: rIdx.y },
+    bl: { x: lThumb.x, y: lThumb.y },
+    br: { x: rThumb.x, y: rThumb.y },
+  };
+}
+
+function midpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+// ---------- main loop ----------
+let animId = null;
+const clock = new THREE.Clock();
+
+function loop() {
+  animId = requestAnimationFrame(loop);
+  if (!handLandmarker || rawVideo.readyState < 2) return;
+
+  if (rawVideo.currentTime !== lastVideoTime) {
+    lastVideoTime = rawVideo.currentTime;
+    const results = handLandmarker.detectForVideo(rawVideo, performance.now());
+    const landmarksList = results.landmarks || [];
+
+    drawSkeleton(landmarksList);
+    pointsRef = computeWindow(landmarksList);
+
+    modeLabel.textContent = effectMode + ' mode';
+    const w = threeCanvas.width, h = threeCanvas.height;
+    updateMeshGeometry(w, h);
+    updateOverlay(w, h);
+  }
+
+  material.uniforms.time.value = clock.getElapsedTime();
+  material.uniforms.uMode.value += ((effectMode === 'xray' ? 1 : 0) - material.uniforms.uMode.value) * 0.15;
+  videoTexture.needsUpdate = true;
+
+  renderer.render(scene, camera3);
+}
+
+// ---------- init ----------
+async function init() {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+  );
+  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO",
+    numHands: 2
+  });
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+  });
+
+  rawVideo.srcObject = stream;
+  bgVideo.srcObject = stream;
+  await rawVideo.play();
+  await bgVideo.play();
+
+  await new Promise(resolve => {
+    if (rawVideo.readyState >= 2) return resolve();
+    rawVideo.onloadedmetadata = () => resolve();
+  });
+
+  videoAspect = rawVideo.videoWidth / rawVideo.videoHeight || 16/9;
+  layout();
+  initThree(threeCanvas.width, threeCanvas.height);
+  layout();
+
+  loadingOverlay.style.display = 'none';
+  loop();
+}
+
+init().catch(err => {
+  console.error(err);
+  loadingOverlay.textContent = 'Error: ' + err.message;
+});
+
+window.addEventListener('beforeunload', () => {
+  if (animId) cancelAnimationFrame(animId);
+  if (handLandmarker) handLandmarker.close();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+});
+</script>
 </body>
 </html>
