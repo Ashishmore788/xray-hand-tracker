@@ -1,0 +1,30 @@
+{
+  "name": "xray-hand-tracker",
+  "version": "1.0.0",
+  "description": "Real-time hand skeleton tracking with AI-powered computer vision using MediaPipe",
+  "main": "index.html",
+  "scripts": {
+    "start": "open index.html",
+    "serve": "python -m http.server 8000"
+  },
+  "keywords": [
+    "hand-tracking",
+    "computer-vision",
+    "mediapipe",
+    "machine-learning",
+    "skeleton-tracking",
+    "webcam",
+    "real-time",
+    "gesture-recognition"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/xray-hand-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/xray-hand-tracker/issues"
+  },
+  "homepage": "https://github.com/yourusername/xray-hand-tracker#readme"
+}
