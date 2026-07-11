@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Tracker</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            font-family: Arial;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .container {
+            background: #333;
+            padding: 20px;
+            border-radius: 10px;
+            max-width: 800px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin: 0 0 10px 0;
+        }
+        
+        .status {
+            color: #0f0;
+            text-align: center;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        
+        canvas {
+            width: 100%;
+            background: black;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: block;
+        }
+        
+        .buttons {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            padding: 10px 25px;
+            margin: 5px;
+            font-size: 16px;
+            background: #0066ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        button:hover {
+            background: #0052cc;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .info {
+            color: white;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🦴 Hand Tracker</h1>
+        <div class="status" id="status">Ready</div>
+        <canvas id="canvas" width="800" height="600"></canvas>
+        <div class="buttons">
+            <button id="startBtn">Start Camera</button>
+            <button id="stopBtn" disabled>Stop Camera</button>
+        </div>
+        <div class="info">
+            <p>Hands: <strong id="handCount">0</strong></p>
+            <p>FPS: <strong id="fps">0</strong></p>
+        </div>
+    </div>
+
+    <video id="video" style="display:none;" playsinline autoplay muted></video>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424926/hands.js"></script>
+    
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('video');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusEl = document.getElementById('status');
+        const handCountEl = document.getElementById('handCount');
+        const fpsEl = document.getElementById('fps');
+
+        let hands = null;
+        let isRunning = false;
+        let frameCount = 0;
+        let lastTime = Date.now();
+
+        startBtn.addEventListener('click', async () => {
+            try {
+                statusEl.textContent = 'Requesting camera...';
+                statusEl.style.color = '#ff0';
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false
+                });
+                
+                video.srcObject = stream;
+                
+                // Wait for video to be ready
+                await new Promise(resolve => {
+                    const checkReady = () => {
+                        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                            resolve();
+                        } else {
+                            setTimeout(checkReady, 100);
+                        }
+                    };
+                    checkReady();
+                });
+                
+                // Set canvas size
+                canvas.width = video.videoWidth || 1280;
+                canvas.height = video.videoHeight || 720;
+                
+                console.log('Video ready! Size:', canvas.width, 'x', canvas.height);
+                
+                // Initialize hands
+                if (typeof Hands !== 'undefined') {
+                    initHands();
+                } else {
+                    statusEl.textContent = 'Error: Library not loaded';
+                    statusEl.style.color = '#f00';
+                }
+                
+                isRunning = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusEl.textContent = 'Running';
+                statusEl.style.color = '#0f0';
+                
+            } catch (error) {
+                statusEl.textContent = 'ERROR: ' + error.name;
+                statusEl.style.color = '#f00';
+                console.error(error);
+                alert('Error: ' + error.message);
+            }
+        });
+
+        function initHands() {
+            hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424926/${file}`;
+                }
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onResults);
+            detectFrame();
+        }
+
+        function onResults(results) {
+            // Draw video
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Draw hands
+            if (results.multiHandLandmarks) {
+                handCountEl.textContent = results.multiHandLandmarks.length;
+                
+                results.multiHandLandmarks.forEach((landmarks, idx) => {
+                    const isRight = results.multiHandedness[idx].label === 'Right';
+                    const color = isRight ? '#FF6B6B' : '#4A90E2';
+                    
+                    // Draw joints
+                    landmarks.forEach((lm, i) => {
+                        const x = lm.x * canvas.width;
+                        const y = lm.y * canvas.height;
+                        
+                        ctx.fillStyle = color;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        ctx.strokeStyle = 'white';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    });
+                    
+                    // Draw skeleton
+                    const connections = [
+                        [0, 1], [1, 2], [2, 3], [3, 4],
+                        [0, 5], [5, 6], [6, 7], [7, 8],
+                        [5, 9], [9, 10], [10, 11], [11, 12],
+                        [9, 13], [13, 14], [14, 15], [15, 16],
+                        [13, 17], [17, 18], [18, 19], [19, 20],
+                        [0, 17]
+                    ];
+                    
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 2;
+                    ctx.globalAlpha = 0.6;
+                    
+                    connections.forEach(([a, b]) => {
+                        const from = landmarks[a];
+                        const to = landmarks[b];
+                        ctx.beginPath();
+                        ctx.moveTo(from.x * canvas.width, from.y * canvas.height);
+                        ctx.lineTo(to.x * canvas.width, to.y * canvas.height);
+                        ctx.stroke();
+                    });
+                    
+                    ctx.globalAlpha = 1;
+                });
+            } else {
+                handCountEl.textContent = '0';
+            }
+            
+            // FPS
+            frameCount++;
+            const now = Date.now();
+            if (now - lastTime >= 1000) {
+                fpsEl.textContent = frameCount;
+                frameCount = 0;
+                lastTime = now;
+            }
+        }
+
+        function detectFrame() {
+            if (!isRunning) return;
+            
+            if (hands) {
+                hands.send({ image: video });
+            }
+            
+            requestAnimationFrame(detectFrame);
+        }
+
+        stopBtn.addEventListener('click', () => {
+            isRunning = false;
+            
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(t => t.stop());
+            }
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            handCountEl.textContent = '0';
+            fpsEl.textContent = '0';
+            
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            statusEl.textContent = 'Stopped';
+            statusEl.style.color = '#ffa500';
+        });
+    </script>
+</body>
+</html>
